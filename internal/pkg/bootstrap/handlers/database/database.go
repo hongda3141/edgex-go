@@ -72,6 +72,7 @@ func (d Database) newDBClient(
 
 	databaseInfo := d.database.GetDatabaseInfo()["Primary"]
 	switch databaseInfo.Type {
+	// Deprecated: Mongo functionality is deprecated as of the Geneva release.
 	case db.MongoDB:
 		return mongo.NewClient(
 			db.Configuration{
@@ -83,15 +84,16 @@ func (d Database) newDBClient(
 				Password:     credentials.Password,
 			})
 	case db.RedisDB:
-		if d.isCoreData {
-			return redis.NewCoreDataClient(
-				db.Configuration{
-					Host: databaseInfo.Host,
-					Port: databaseInfo.Port,
-				},
-				lc)
+		conf := db.Configuration{
+			Host:     databaseInfo.Host,
+			Port:     databaseInfo.Port,
+			Password: credentials.Password,
 		}
-		return redis.NewClient(db.Configuration{Host: databaseInfo.Host, Port: databaseInfo.Port}, lc)
+
+		if d.isCoreData {
+			return redis.NewCoreDataClient(conf, lc)
+		}
+		return redis.NewClient(conf, lc)
 	default:
 		return nil, db.ErrUnsupportedDatabase
 	}

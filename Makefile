@@ -13,7 +13,13 @@ GOCGO=CGO_ENABLED=1 GO111MODULE=on go
 DOCKERS=docker_core_data docker_core_metadata docker_core_command docker_support_logging docker_support_notifications docker_sys_mgmt_agent docker_support_scheduler docker_security_secrets_setup docker_security_proxy_setup docker_security_secretstore_setup
 .PHONY: $(DOCKERS)
 
-MICROSERVICES=cmd/core-metadata/core-metadata cmd/core-data/core-data cmd/core-command/core-command cmd/support-logging/support-logging cmd/support-notifications/support-notifications cmd/sys-mgmt-executor/sys-mgmt-executor cmd/sys-mgmt-agent/sys-mgmt-agent cmd/support-scheduler/support-scheduler cmd/security-secrets-setup/security-secrets-setup cmd/security-proxy-setup/security-proxy-setup cmd/security-secretstore-setup/security-secretstore-setup cmd/security-file-token-provider/security-file-token-provider
+MICROSERVICES=cmd/core-metadata/core-metadata cmd/core-data/core-data \
+  cmd/core-command/core-command cmd/support-logging/support-logging \
+	cmd/support-notifications/support-notifications cmd/sys-mgmt-executor/sys-mgmt-executor \
+	cmd/sys-mgmt-agent/sys-mgmt-agent cmd/support-scheduler/support-scheduler \
+	cmd/security-secrets-setup/security-secrets-setup cmd/security-proxy-setup/security-proxy-setup \
+	cmd/security-secretstore-setup/security-secretstore-setup \
+	cmd/security-file-token-provider/security-file-token-provider cmd/security-secretstore-read/security-secretstore-read
 
 .PHONY: $(MICROSERVICES)
 
@@ -64,6 +70,9 @@ cmd/security-secretstore-setup/security-secretstore-setup:
 cmd/security-file-token-provider/security-file-token-provider:
 	$(GO) build $(GOFLAGS) -o ./cmd/security-file-token-provider/security-file-token-provider ./cmd/security-file-token-provider
 
+cmd/security-secretstore-read/security-secretstore-read:
+	$(GO) build $(GOFLAGS) -o $@ ./cmd/security-secretstore-read
+
 clean:
 	rm -f $(MICROSERVICES)
 
@@ -91,7 +100,6 @@ docker_core_metadata:
 		--label "git_sha=$(GIT_SHA)" \
 		-t edgexfoundry/docker-core-metadata-go:$(GIT_SHA) \
 		-t edgexfoundry/docker-core-metadata-go:$(DOCKER_TAG) \
-		-t nexus3.edgexfoundry.org:10004/docker-core-metadata-go:$(DOCKER_TAG) \
 		.
 
 docker_core_data:
@@ -102,7 +110,6 @@ docker_core_data:
 		--label "git_sha=$(GIT_SHA)" \
 		-t edgexfoundry/docker-core-data-go:$(GIT_SHA) \
 		-t edgexfoundry/docker-core-data-go:$(DOCKER_TAG) \
-		-t nexus3.edgexfoundry.org:10004/docker-core-data-go:$(DOCKER_TAG) \
 		.
 
 docker_core_command:
@@ -113,7 +120,6 @@ docker_core_command:
 		--label "git_sha=$(GIT_SHA)" \
 		-t edgexfoundry/docker-core-command-go:$(GIT_SHA) \
 		-t edgexfoundry/docker-core-command-go:$(DOCKER_TAG) \
-		-t nexus3.edgexfoundry.org:10004/docker-core-command-go:$(DOCKER_TAG) \
 		.
 
 docker_support_logging:
@@ -124,7 +130,6 @@ docker_support_logging:
 		--label "git_sha=$(GIT_SHA)" \
 		-t edgexfoundry/docker-support-logging-go:$(GIT_SHA) \
 		-t edgexfoundry/docker-support-logging-go:$(DOCKER_TAG) \
-		-t nexus3.edgexfoundry.org:10004/docker-support-logging-go:$(DOCKER_TAG) \
 		.
 
 docker_support_notifications:
@@ -135,7 +140,6 @@ docker_support_notifications:
 		--label "git_sha=$(GIT_SHA)" \
 		-t edgexfoundry/docker-support-notifications-go:$(GIT_SHA) \
 		-t edgexfoundry/docker-support-notifications-go:$(DOCKER_TAG) \
-		-t nexus3.edgexfoundry.org:10004/docker-support-notifications-go:$(DOCKER_TAG) \
 		.
 
 docker_support_scheduler:
@@ -146,7 +150,6 @@ docker_support_scheduler:
 		--label "git_sha=$(GIT_SHA)" \
 		-t edgexfoundry/docker-support-scheduler-go:$(GIT_SHA) \
 		-t edgexfoundry/docker-support-scheduler-go:$(DOCKER_TAG) \
-		-t nexus3.edgexfoundry.org:10004/docker-support-scheduler-go:$(DOCKER_TAG) \
 		.
 
 docker_sys_mgmt_agent:
@@ -157,7 +160,6 @@ docker_sys_mgmt_agent:
 		--label "git_sha=$(GIT_SHA)" \
 		-t edgexfoundry/docker-sys-mgmt-agent-go:$(GIT_SHA) \
 		-t edgexfoundry/docker-sys-mgmt-agent-go:$(DOCKER_TAG) \
-		-t nexus3.edgexfoundry.org:10004/docker-sys-mgmt-agent-go:$(DOCKER_TAG) \
 		.
 
 docker_security_secrets_setup:
@@ -168,7 +170,6 @@ docker_security_secrets_setup:
 		--label "git_sha=$(GIT_SHA)" \
 		-t edgexfoundry/docker-edgex-secrets-setup-go:$(GIT_SHA) \
 		-t edgexfoundry/docker-edgex-secrets-setup-go:$(DOCKER_TAG) \
-		-t nexus3.edgexfoundry.org:10004/docker-edgex-secrets-setup-go:$(DOCKER_TAG) \
 		.
 
 docker_security_proxy_setup:
@@ -179,7 +180,6 @@ docker_security_proxy_setup:
 		--label "git_sha=$(GIT_SHA)" \
 		-t edgexfoundry/docker-edgex-security-proxy-setup-go:$(GIT_SHA) \
 		-t edgexfoundry/docker-edgex-security-proxy-setup-go:$(DOCKER_TAG) \
-		-t nexus3.edgexfoundry.org:10004/docker-edgex-security-proxy-setup-go:$(DOCKER_TAG) \
 		.
 
 docker_security_secretstore_setup:
@@ -190,7 +190,6 @@ docker_security_secretstore_setup:
 		--label "git_sha=$(GIT_SHA)" \
 		-t edgexfoundry/docker-edgex-security-secretstore-setup-go:$(GIT_SHA) \
 		-t edgexfoundry/docker-edgex-security-secretstore-setup-go:$(DOCKER_TAG) \
-		-t nexus3.edgexfoundry.org:10004/docker-edgex-security-secretstore-setup-go:$(DOCKER_TAG) \
 		.
 
 raml_verify:

@@ -46,6 +46,7 @@ passthrough:
     configure:
       command-chain:
         - snap/command-chain/snapcraft-runner
+      plugs: [network]
     install:
       environment:
         LC_ALL: C.UTF-8
@@ -69,8 +70,7 @@ confinement: strict
 
 # This applies to all apps
 environment:
-  SecretStore_RootCaCertPath: $SNAP_DATA/pki/EdgeXFoundryCA/EdgeXFoundryCA.pem
-
+  SecretStore_RootCaCertPath: $SNAP_DATA/secrets/ca/ca.pem
 apps:
   # edgex microservices
   consul:
@@ -80,8 +80,8 @@ apps:
     plugs: [network, network-bind]
   redis:
     adapter: full
-    after: [consul]
-    command: bin/redis-server $SNAP_DATA/redis/redis.conf
+    after: [security-secretstore-setup]
+    command: bin/redis-launch.sh
     daemon: simple
     plugs: [network, network-bind]
   mongod:
@@ -137,7 +137,7 @@ apps:
     command: bin/security-secrets-setup -confdir $SNAP_DATA/config/security-secrets-setup/res generate
     daemon: oneshot
     environment:
-      SecretsSetup_DeployDir: $SNAP_DATA/pki/
+      SecretsSetup_DeployDir: $SNAP_DATA/secrets/
       SecretsSetup_CertConfigDir: $SNAP_DATA/config/security-secrets-setup/res
       XDG_RUNTIME_DIR: /tmp
     start-timeout: 15m
@@ -151,22 +151,29 @@ apps:
     environment:
       VAULT_CONFIG: "$SNAP_DATA/config/security-secret-store/vault-config.hcl"
       VAULT_ADDR: "https://localhost:8200"
-      VAULT_UI: "true"
+    plugs:
+      - network
+      - network-bind
+  vault-cli:
+    adapter: none
+    command: bin/vault
+    environment:
+      VAULT_CONFIG: "$SNAP_DATA/config/security-secret-store/vault-config.hcl"
+      VAULT_ADDR: "https://localhost:8200"
     plugs:
       - network
       - network-bind
   security-secretstore-setup:
     adapter: full
     after: [vault]
-    command: bin/security-secretstore-setup -confdir $SNAP_DATA/config/security-secretstore-setup/res $INIT_ARG
+    command: bin/security-secretstore-setup-launch.sh
     daemon: oneshot
     environment:
-      INIT_ARG: "--vaultInterval=10"
       SecretService_Server: localhost
       SecretService_ServerName: localhost
-      SecretService_CaFilePath: $SNAP_DATA/pki/ca/ca.pem
-      SecretService_CertFilePath: $SNAP_DATA/pki/EdgeXFoundryCA/localhost.pem
-      SecretService_KeyFilePath: $SNAP_DATA/pki/EdgeXFoundryCA/localhost.priv.key
+      SecretService_CaFilePath: $SNAP_DATA/secrets/ca/ca.pem
+      SecretService_CertFilePath: $SNAP_DATA/secrets/edgex-kong/server.crt
+      SecretService_KeyFilePath: $SNAP_DATA/secrets/edgex-kong/server.key
       SecretService_TokenFolderPath: $SNAP_DATA/config/security-secrets-setup/res
       SecretService_TokenProvider: $SNAP/bin/security-file-token-provider
       SecretService_TokenProviderArgs: "-confdir, $SNAP_DATA/config/security-file-token-provider/res"
@@ -177,6 +184,8 @@ apps:
       TokenFileProvider_ConfigFile: $SNAP_DATA/config/security-file-token-provider/res/token-config.json
       TokenFileProvider_OutputDir: $SNAP_DATA/secrets
 
+      # environment var for security-secretstore-read, exec'd by wrapper script
+      REDIS5_PASSWORD_PATHNAME: $SNAP_DATA/secrets/edgex-redis/redis5-password
     start-timeout: 15m
     plugs: [network]
   security-proxy-setup:
@@ -188,7 +197,7 @@ apps:
     environment:
       INIT_ARG: "--init=true"
       SecretService_TokenPath: $SNAP_DATA/secrets/edgex-security-proxy-setup/secrets-token.json
-      SecretService_CACertPath: $SNAP_DATA/pki/EdgeXFoundryCA/EdgeXFoundryCA.pem
+      SecretService_CACertPath: $SNAP_DATA/secrets/ca/ca.pem
     daemon: oneshot
     start-timeout: 15m
     plugs: [network]
@@ -329,12 +338,16 @@ apps:
     adapter: full
     command: bin/app-service-configurable -confdir $SNAP_DATA/config/app-service-configurable/res -profile rules-engine --registry
     daemon: simple
+    environment:
+      Binding_PublishTopic: events
     plugs: [network, network-bind]
-
   # helper commands the snap exposes
   security-proxy-setup-cmd:
     adapter: none
     command: bin/security-proxy-setup
+    environment:
+      SecretService_TokenPath: $SNAP_DATA/secrets/edgex-security-proxy-setup/secrets-token.json
+      SecretService_CACertPath: $SNAP_DATA/secrets/ca/ca.pem
     plugs: [home, removable-media, network]
   redis-cli:
     adapter: full
@@ -385,7 +398,7 @@ apps:
       PGDATABASE: kong
     command-chain:
       - bin/perl5lib-launch.sh
-      # createuser should be run as the snap_daemon user, which is the user
+      # psql should be run as the snap_daemon user, which is the user
       # who is initially created as a role with postgres
       - bin/drop
     plugs: [home, removable-media, network]
@@ -400,19 +413,6 @@ apps:
     command-chain:
       - bin/perl5lib-launch.sh
     plugs: [home, removable-media, network]
-  createuser:
-    adapter: full
-    command: usr/bin/createuser
-    environment:
-      LC_ALL: C.UTF-8
-      LANG: C.UTF-8
-      PGHOST: $SNAP_COMMON/sockets
-    command-chain:
-      - bin/perl5lib-launch.sh
-      # createuser should be run as the snap_daemon user, which is the user
-      # who is initially created as a role with postgres
-      - bin/drop
-    plugs: [home, removable-media, network]
   createdb:
     adapter: full
     command: usr/bin/createdb
@@ -426,6 +426,27 @@ apps:
       # who is initially created as a role with postgres
       - bin/drop
     plugs: [home, removable-media, network]
+  kuiper:
+    adapter: full
+    command: bin/kuiper-server
+    daemon: simple
+    environment:
+      KuiperBaseKey: $SNAP_DATA/kuiper
+      # KUIPER_DEBUG: "true"
+      KUIPER_CONSOLE_LOG: "true"
+      KUIPER_REST_PORT: 48075
+      EDGEX_SERVER: localhost
+      EDGEX_SERVICE_SERVER: http://localhost:48080
+      EDGEX_TOPIC: events
+      EDGEX_PROTOCOL: tcp
+      EDGEX_PORT: 5566
+    plugs: [network, network-bind]
+  kuiper-cli:
+    adapter: full
+    command: bin/kuiper-cli
+    environment:
+      KuiperBaseKey: $SNAP_DATA/kuiper
+    plugs: [home, network, network-bind]
 
 parts:
   version:
@@ -449,6 +470,7 @@ parts:
     # infrequently and will minimize unnecessary part re-building by snapcraft
     source: snap/local/build-helpers
     stage-packages:
+      - apg
       - curl
       - jq
 
@@ -526,7 +548,35 @@ parts:
   # from edgex-go which at this point will fail
   # eventually we would like these changes to be upstreamed but until then
   # they live here. see also https://github.com/edgexfoundry/edgex-go/issues/1109
-  go:
+  go112:
+    plugin: nil
+    source: snap/local/build-helpers
+    override-build: |
+      # use dpkg architecture to figure out our target arch
+      # note - we specifically don't use arch
+      case "$(dpkg --print-architecture)" in
+        amd64)
+          FILE_NAME=go1.12.7.linux-amd64.tar.gz
+          FILE_HASH=66d83bfb5a9ede000e33c6579a91a29e6b101829ad41fffb5c5bb6c900e109d9
+          ;;
+        arm64)
+          FILE_NAME=go1.12.7.linux-arm64.tar.gz
+          FILE_HASH=4da1f7198a8fa0c4067852656b6c10153a4eca5a26aca28ef02ae9f4a7939ba5
+          ;;
+      esac
+      # download the archive, failing on ssl cert problems
+      curl https://dl.google.com/go/$FILE_NAME -O
+      echo "$FILE_HASH $FILE_NAME" > sha256
+      sha256sum -c sha256 | grep OK
+      mkdir -p $SNAPCRAFT_STAGE/go1.12
+      tar -C $SNAPCRAFT_STAGE/go1.12 -xf "$FILE_NAME" --strip-components=1
+    prime:
+      - "-*"
+    # build after kong to prevent staging go binaries into the snap as they
+    # are large - see the TODO on the kong part
+    after: [go-build-helper, kong]
+
+  go113:
     plugin: nil
     source: snap/local/build-helpers
     override-build: |
@@ -546,23 +596,24 @@ parts:
       curl https://dl.google.com/go/$FILE_NAME -O
       echo "$FILE_HASH $FILE_NAME" > sha256
       sha256sum -c sha256 | grep OK
-      tar -C $SNAPCRAFT_STAGE -xf go*.tar.gz --strip-components=1
+      mkdir -p $SNAPCRAFT_STAGE/go1.13
+      tar -C $SNAPCRAFT_STAGE/go1.13 -xf "$FILE_NAME" --strip-components=1
     prime:
       - "-*"
-    # build after kong to prevent staging go binaries into the snap as they
-    # are large - see the TODO on the kong part
-    after: [go-build-helper, kong]
+    after: [go112]
 
   consul:
-    after: [go]
+    after: [go113]
     plugin: make
     source: https://github.com/hashicorp/consul.git
-    source-tag: v1.3.1
+    source-tag: v1.7.2
     source-depth: 1
     stage:
       # duplicated file with the deps of vault, so just drop this one and use
       # the file from the vault part instead
       - -usr/share/doc/github.com/patrickmn/go-cache/LICENSE
+      - -usr/share/doc/github.com/miekg/dns/LICENSE
+
     override-build: |
       # When the snap is built by Jenkins w/in a docker instance, the existence of
       # the top level go.mod file causes the consul build to fail when using go 1.13.
@@ -573,7 +624,7 @@ parts:
       fi
 
       . $SNAPCRAFT_STAGE/bin/go-build-helper.sh
-      gopartbootstrap github.com/hashicorp/consul
+      gopartbootstrap github.com/hashicorp/consul 1.13
       export GO111MODULES=off
       go get -u github.com/kardianos/govendor
       govendor install
@@ -609,9 +660,9 @@ parts:
   mongodb:
     plugin: dump
     source:
-      - on amd64: http://downloads.mongodb.org/linux/mongodb-linux-x86_64-ubuntu1804-4.2.0.tgz
+      - on amd64: http://downloads.mongodb.org/linux/mongodb-linux-x86_64-ubuntu1804-4.2.6.tgz
       - else:
-          - on arm64: http://downloads.mongodb.org/linux/mongodb-linux-aarch64-ubuntu1804-4.2.0.tgz
+          - on arm64: http://downloads.mongodb.org/linux/mongodb-linux-aarch64-ubuntu1804-4.2.6.tgz
       - else fail
     organize:
       MPL-2: usr/share/doc/mongodb/MPL-2
@@ -640,26 +691,19 @@ parts:
       LICENSE: usr/share/doc/remarshal/LICENSE
   redis:
     source: https://github.com/antirez/redis.git
-    source-tag: "5.0.4"
+    source-tag: "5.0.8"
     source-depth: 1
     plugin: make
     make-install-var: PREFIX
-    override-build: |
-      snapcraftctl build
-      # process the config file to specify the working directory for redis
-      # as $SNAP_DATA/redis
-      cd $SNAPCRAFT_PART_SRC
-      mkdir -p $SNAPCRAFT_PART_INSTALL/config/redis
-      sed -e s@'dir ./'@'dir \$SNAP_DATA/redis'@ \
-        redis.conf > $SNAPCRAFT_PART_INSTALL/config/redis/redis.conf
   edgex-mongo:
     source: https://github.com/edgexfoundry/docker-edgex-mongo.git
     # TODO (geneva): pin this to a commit or tag for release
     source-branch: master
     source-depth: 1
     plugin: make
-    after: [go]
+    after: [go113]
     override-build: |
+      export PATH="$SNAPCRAFT_STAGE/go1.13/bin:$GOPATH/bin:$PATH"
       cd $SNAPCRAFT_PART_SRC
       make build
 
@@ -669,25 +713,43 @@ parts:
 
       cat "./cmd/res/configuration.toml" | \
         sed -e "s@TokenFile = \"/vault/config/assets/resp-init.json\"@TokenFile = \"\$SNAP_DATA/secrets/edgex-mongo/secrets-token.json\"@" \
-            -e "s@RootCaCertPath = \"/vault/config/pki/EdgeXFoundryCA/EdgeXFoundryCA.pem\"@RootCaCertPath = \"\$SNAP_DATA/pki/EdgeXFoundryCA/EdgeXFoundryCA.pem\"@" \
+            -e "s@RootCaCertPath = \"/vault/config/pki/EdgeXFoundryCA/EdgeXFoundryCA.pem\"@RootCaCertPath = \"\$SNAP_DATA/secrets/ca/ca.pem\"@" \
             > \
        "$SNAPCRAFT_PART_INSTALL/config/edgex-mongo/res/configuration.toml"
 
   edgex-go:
     source: .
     plugin: make
-    after: [go]
+    after: [go113]
     override-build: |
+      export PATH="$SNAPCRAFT_STAGE/go1.13/bin:$GOPATH/bin:$PATH"
       cd $SNAPCRAFT_PART_SRC
+
       make build
 
       # copy service binaries, configuration, and license files into the snap install
       for service in core-command core-data core-metadata support-logging support-notifications support-scheduler sys-mgmt-agent \
-          security-proxy-setup security-secrets-setup security-secretstore-setup security-file-token-provider; do
+          security-proxy-setup security-secrets-setup security-secretstore-setup security-file-token-provider security-secretstore-read; do
 
           install -DT "./cmd/$service/$service" "$SNAPCRAFT_PART_INSTALL/bin/$service"
 
-          if [ "$service" != "security-file-token-provider" ]; then
+          if [ "$service" = "security-secretstore-read" ]; then
+              mkdir -p "$SNAPCRAFT_PART_INSTALL/config/$service/res/"
+
+              # since security-secretstore-read doesn't support config env overrides, edit the
+              # configuration file at build time
+              CONFIG_FILE="./cmd/$service/res/configuration.toml"
+              if grep -q "/tmp/edgex" "$CONFIG_FILE"; then
+                  sed -e "s@\"/tmp/edgex/secrets/ca/ca.pem\"@\"\$SNAP_DATA/secrets/ca/ca.pem\"@" \
+                      -e "s@\"/tmp/edgex/secrets/edgex-redis/secrets-token.json\"@\"\$SNAP_DATA/secrets/edgex-redis/secrets-token.json\"@" \
+                      -e "s@\"/tmp/edgex/secrets/edgex-redis/redis5-password\"@\"\$SNAP_DATA/secrets/edgex-redis/redis5-password\"@" \
+                      -e "s@edgex-vault@localhost@" \
+                      "$CONFIG_FILE" > "$SNAPCRAFT_PART_INSTALL/config/$service/res/configuration.toml"
+              else
+                  echo "Build failed; part is out of sync with edgex-go"
+                  exit 1
+              fi
+          elif [ "$service" != "security-file-token-provider" ]; then
               install -DT "./cmd/$service/res/configuration.toml" "$SNAPCRAFT_PART_INSTALL/config/$service/res/configuration.toml"
           else
               install -DT "./cmd/security-secretstore-setup/res-file-token-provider/configuration.toml" \
@@ -718,7 +780,7 @@ parts:
 
   support-rulesengine:
     source: https://github.com/edgexfoundry/support-rulesengine.git
-    source-branch: "master"
+    source-tag: v1.1.0
     source-depth: 1
     plugin: maven
     maven-options: ["-Dmaven.test.skip=true"]
@@ -753,8 +815,6 @@ parts:
       - -usr/lib/jvm/*/jre/man
       - -usr/lib/jvm/*/jre/lib/images
       - -usr/lib/jvm/*/include
-      - -usr/lib/jvm/*/bin
-      - -usr/lib/jvm/*/lib
       - -usr/lib/jvm/*/docs
       - -usr/lib/jvm/*/src.zip
       - -usr/share/X11
@@ -765,15 +825,25 @@ parts:
   # KONG + OPENRESTY PARTS
   openresty-kong-patches:
     plugin: dump
-    source: https://github.com/Kong/openresty-patches.git
-    source-depth: 1
+    # this used to be in https://github.com/Kong/openresty-patches but was
+    # moved recently to live in-tree with the build-tools
+    source: nil
+    source-type: local
+    override-pull:
+      # we have to manually git clone this because the repo is stupid and has a
+      # non-public submodule, which we cannot clone, and snapcraft always uses
+      # --recursive when cloning which will prompt for authentication
+      # see https://bugs.launchpad.net/snapcraft/+bug/1640675
+      # so we manually clone it without --recursive
+      git clone https://github.com/Kong/kong-build-tools.git $SNAPCRAFT_PART_SRC
     organize:
-      patches: openresty-kong-patches
+      openresty-patches/patches: openresty-kong-patches
     stage: [openresty-kong-patches]
     prime: [-*]
   lua-kong-nginx-module:
     source: https://github.com/Kong/lua-kong-nginx-module.git
-    source-tag: 0.0.4
+    # TODO: is this the right tag for this? it's just the newest, so ???
+    source-tag: 0.0.6
     plugin: nil
     override-build: |
       # install the static lualib dir into the final snap, the compiled parts
@@ -791,13 +861,12 @@ parts:
       done
       mkdir -p $SNAPCRAFT_PART_INSTALL/usr/share/doc/lua-kong-nginx-module
       cp LICENSE $SNAPCRAFT_PART_INSTALL/usr/share/doc/lua-kong-nginx-module/LICENSE
-
   openresty:
     # see comment on kong's after spec for why we order after snapcraft-preload
     # here
     after: [openresty-kong-patches, snapcraft-preload, lua-kong-nginx-module]
     plugin: autotools
-    source: https://openresty.org/download/openresty-1.15.8.1.tar.gz
+    source: https://openresty.org/download/openresty-1.15.8.2.tar.gz
     install-via: prefix
     # configure options here from https://getkong.org/install/source/
     configflags:
@@ -821,7 +890,7 @@ parts:
       snapcraftctl pull
       cd $SNAPCRAFT_PART_SRC/bundle
       # apply patches from openresty-kong-patches
-      for i in $SNAPCRAFT_STAGE/openresty-kong-patches/1.15.8.1/*.patch; do
+      for i in $SNAPCRAFT_STAGE/openresty-kong-patches/1.15.8.2/*.patch; do
         patch -p1 < $i
       done
     override-build: |
@@ -870,12 +939,11 @@ parts:
     after: [lua]
     plugin: autotools
     source: https://github.com/luarocks/luarocks.git
-    source-branch: v3.1.3
+    source-branch: v3.2.1
     source-depth: 1
     override-build: |
       ./configure \
         --prefix=$SNAPCRAFT_STAGE \
-        --lua-suffix=jit \
         --with-lua=$SNAPCRAFT_STAGE \
         --with-lua-include=$SNAPCRAFT_STAGE/luajit/include/luajit-2.1 \
         --lua-version=5.1
@@ -896,7 +964,7 @@ parts:
     after: [snapcraft-preload, luarocks]
     source: https://github.com/kong/kong.git
     plugin: nil
-    source-tag: 1.3.0
+    source-tag: 2.0.4
     source-depth: 1
     build-packages:
       - unzip
@@ -905,8 +973,6 @@ parts:
       - libyaml-dev
       - luarocks
       - lua5.1
-      - build-essential
-      - autoconf
     stage-packages:
       - perl
       - luarocks
@@ -966,22 +1032,17 @@ parts:
 
   # SECURITY SERVICES PARTS
   vault:
-    after: [go]
+    after: [go112]
     plugin: make
     source: https://github.com/hashicorp/vault.git
-    source-tag: v1.0.2
+    source-tag: v1.3.1
     source-depth: 1
     override-build: |
-      # When the snap is built by Jenkins w/in a docker instance, the existence of
-      # the top level go.mod file causes the consul build to fail when using go 1.13.
-      # This workaround can probably be removed if/when consul is updated to a more
-      # recent version.
-      if [ -f /build/go.mod ]; then
-        mv /build/go.mod /build/go.mod.bk
-      fi
+      # see https://github.com/hashicorp/vault/issues/8927
+      patch -p1 < "$SNAPCRAFT_PROJECT_DIR/snap/local/patches/0001-Makefile-rm-golangci-lint-tool.patch"
 
       . $SNAPCRAFT_STAGE/bin/go-build-helper.sh
-      gopartbootstrap github.com/hashicorp/vault
+      gopartbootstrap github.com/hashicorp/vault 1.12
       export GO111MODULES=off
       make bootstrap
       make dev
@@ -1017,14 +1078,17 @@ parts:
       if [ -f /build/go.mod.bk ]; then
         mv /build/go.mod.bk /build/go.mod
       fi
+
   # DEVICE SERVICES parts
   device-virtual-go:
     source: https://github.com/edgexfoundry/device-virtual-go.git
     source-depth: 1
-    source-branch: master
+    # TODO: update to v1.2.0 rel tag (or latest dev tag)
+    source-tag: v1.2.0-dev.12
     plugin: make
-    after: [go]
+    after: [go113]
     override-build: |
+      export PATH="$SNAPCRAFT_STAGE/go1.13/bin:$GOPATH/bin:$PATH"
       cd $SNAPCRAFT_PART_SRC
       make build
 
@@ -1032,24 +1096,26 @@ parts:
       install -DT "./cmd/res/configuration.toml" \
         "$SNAPCRAFT_PART_INSTALL/config/device-virtual/res/configuration.toml"
 
-      for profileType in bool float int uint; do
+      for profileType in bool float int uint binary; do
         install -T "./cmd/res/device.virtual.$profileType.yaml" \
           "$SNAPCRAFT_PART_INSTALL/config/device-virtual/res/device.virtual.$profileType.yaml"
       done
 
-      install -DT "./cmd/Attribution.txt" \
+      install -DT "./Attribution.txt" \
          "$SNAPCRAFT_PART_INSTALL/usr/share/doc/device-virtual/Attribution.txt"
       install -DT "./LICENSE" \
          "$SNAPCRAFT_PART_INSTALL/usr/share/doc/device-virtual/LICENSE"
 
   app-service-config:
     source: https://github.com/edgexfoundry/app-service-configurable.git
-    source-branch: master
+    # TODO: update to v1.2.0 rel tag (or latest dev tag)
+    source-tag: v1.1.0-dev.13
     plugin: make
     build-packages: [gcc, git, libzmq3-dev, pkg-config]
     stage-packages: [libzmq5]
-    after: [go]
+    after: [go113]
     override-build: |
+      export PATH="$SNAPCRAFT_STAGE/go1.13/bin:$GOPATH/bin:$PATH"
       cd $SNAPCRAFT_PART_SRC
       make build
 
@@ -1062,3 +1128,30 @@ parts:
          "$SNAPCRAFT_PART_INSTALL/usr/share/doc/app-service-configurable/Attribution.txt"
       install -DT "./LICENSE" \
          "$SNAPCRAFT_PART_INSTALL/usr/share/doc/app-service-configurable/LICENSE"
+
+  kuiper:
+    source: https://github.com/emqx/kuiper.git
+    source-tag: 0.3.2
+    plugin: make
+    after: [go113]
+    override-build: |
+      export PATH="$SNAPCRAFT_STAGE/go1.13/bin:$GOPATH/bin:$PATH"
+
+      cd $SNAPCRAFT_PART_SRC
+      export BUILD_PATH=$SNAPCRAFT_PART_BUILD
+      export PACKAGES_PATH=$SNAPCRAFT_PART_INSTALL
+      make build_with_edgex
+      make real_pkg
+      cd $SNAPCRAFT_PART_INSTALL
+      tar -xvf kuiper*.tar.gz --strip-components=1
+      rm *.zip *.gz
+
+      install -DT "$SNAPCRAFT_PART_SRC/LICENSE" \
+         "$SNAPCRAFT_PART_INSTALL/usr/share/doc/kuiper/LICENSE"
+    organize:
+      bin/cli: bin/kuiper-cli
+      bin/server: bin/kuiper-server
+    stage:
+      - -etc/mqtt_source.yaml
+    stage-packages:
+      - libzmq3-dev
